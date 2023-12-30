@@ -2,11 +2,11 @@
 #define OSSM 1
 
 #define CUM 2
-uint8_t CUM_Address[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 
 
 #define OSSM_ID  1 //OSSM_ID Default can be changed with M5 Remote in the Future will be Saved in EPROOM
 #define M5_ID 99 //M5_ID Default can be changed with M5 Remote in the Future will be Saved in EPROOM
+#define EJECT_ID 69
 #define BATTERY_CHARGE_CURRENT kCHG_100mA  // Charge current, must be one of AXP192::CHGCurrent
 
 
