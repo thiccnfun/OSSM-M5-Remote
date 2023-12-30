@@ -47,6 +47,7 @@ int screenHeight = 240;
 #define ST_UI_PATTERN 11
 #define ST_UI_Torqe 12
 #define ST_UI_EJECTSETTINGS 13
+#define ST_UI_PULLOUTSETTINGS 14
 
 #define ST_UI_SETTINGS 20
 
@@ -74,6 +75,7 @@ int menuestatus = CONNECT;
 #define DARKMODE 1
 #define VIBRATE 2
 #define LEFTY 6
+#define PULLOUT 7
 
 bool eject_status = false;
 bool dark_mode = false;
@@ -124,11 +126,13 @@ long strokeenc = 0;
 long sensationenc = 0;
 long torqe_f_enc = 0;
 long torqe_r_enc = 0;
+long pullout_r_enc = 0;
 long cum_t_enc = 0;
 long cum_si_enc =0;
 long cum_s_enc = 0;
 long cum_a_enc = 0;
 long encoder4_enc = 0;
+long pullout_enc = 0;
 
 extern float maxdepthinmm = 180.0;
 extern float speedlimit = 600;
@@ -140,6 +144,7 @@ float stroke = 0.0;
 float sensation = 0.0;
 float torqe_f = 100.0;
 float torqe_r = -180.0;
+float pullout_speed = 6.0; // TODO: change?
 float cum_time = 0.0;
 float cum_speed = 0.0;
 float cum_size = 0.0;
@@ -425,6 +430,15 @@ void savesettings(lv_event_t * e)
   ESP.restart();
 }
 
+void savepulloutsettings(lv_event_t * e)
+{
+  pullout_speed = lv_slider_get_value(ui_pulloutspeedslider);
+	EEPROM.put(PULLOUT, pullout_speed);
+  EEPROM.commit();
+  delay(100);
+  ESP.restart();
+}
+
 void screenmachine(lv_event_t * e)
 {
   if (lv_scr_act() == ui_Start){
@@ -463,6 +477,13 @@ void screenmachine(lv_event_t * e)
 
   } else if (lv_scr_act() == ui_EJECTSettings){
     st_screens = ST_UI_EJECTSETTINGS;
+  } else if (lv_scr_act() == ui_PulloutSettings){
+    st_screens = ST_UI_PULLOUTSETTINGS;
+
+    pullout_speed = lv_slider_get_value(ui_pulloutspeedslider);
+    pullout_enc = fscale(0.5, speedlimit, 0, Encoder_MAP, pullout_speed, 0);
+    encoder4.setCount(pullout_enc);
+
   } else if (lv_scr_act() == ui_Settings){
     st_screens = ST_UI_SETTINGS;
   }
@@ -476,6 +497,30 @@ void ejectcreampie(lv_event_t * e){
     lv_obj_add_state(ui_HomeButtonL, LV_STATE_CHECKED);
     EJECT_On = true;
   } 
+}
+
+void dopullout(lv_event_t * e){
+  depth = 0;
+  stroke = 0;
+  speed = std::min(speed, pullout_speed);
+
+  SendCommand(SPEED, speed, OSSM_ID);
+  delay(100);
+  SendCommand(DEPTH, depth, OSSM_ID);
+  delay(100);
+  SendCommand(STROKE, stroke, OSSM_ID);
+
+  lv_slider_set_value(ui_homespeedslider, speed, LV_ANIM_OFF);
+  speedenc = fscale(0.5, speedlimit, 0, Encoder_MAP, speed, speedscale);
+  encoder1.setCount(speedenc);
+
+  lv_slider_set_value(ui_homedepthslider, depth, LV_ANIM_OFF);
+  depthenc = fscale(0, maxdepthinmm, 0, Encoder_MAP, depth, 0);
+  encoder2.setCount(depthenc);
+
+  lv_slider_set_value(ui_homestrokeslider, stroke, LV_ANIM_OFF);
+  strokeenc = fscale(0, maxdepthinmm, 0, Encoder_MAP, stroke, 0);
+  encoder3.setCount(strokeenc);
 }
 
 void savepattern(lv_event_t * e){
@@ -561,14 +606,15 @@ void setup(){
   dark_mode = EEPROM.readBool(DARKMODE);
   vibrate_mode = EEPROM.readBool(VIBRATE);
   touch_home = EEPROM.readBool(LEFTY);
+  pullout_speed = EEPROM.get(PULLOUT, pullout_speed);
 
   ui_init();
   
-  if(eject_status == true){
-  lv_obj_add_state(ui_ejectaddon, LV_STATE_CHECKED);
-  lv_obj_clear_state(ui_EJECTSettingButton, LV_STATE_DISABLED);
-  lv_obj_clear_state(ui_HomeButtonL, LV_STATE_DISABLED);
-  }
+  // if(eject_status == true){
+  // lv_obj_add_state(ui_ejectaddon, LV_STATE_CHECKED);
+  // lv_obj_clear_state(ui_EJECTSettingButton, LV_STATE_DISABLED);
+  // lv_obj_clear_state(ui_HomeButtonL, LV_STATE_DISABLED);
+  // }
   if(dark_mode == true){
   lv_obj_add_state(ui_darkmode, LV_STATE_CHECKED);
   }
@@ -581,6 +627,11 @@ void setup(){
   lv_roller_set_selected(ui_PatternS,2,LV_ANIM_OFF);
   lv_roller_get_selected_str(ui_PatternS,patternstr,0);
   lv_label_set_text(ui_HomePatternLabel,patternstr);
+
+  lv_slider_set_value(ui_pulloutspeedslider, pullout_speed, LV_ANIM_OFF);
+  // char pullout_speed_v[7];
+  // dtostrf(pullout_speed, 6, 0, pullout_speed_v);
+  // lv_label_set_text(ui_pulloutspeedvalue, torqe_r_v); // TODO: enable 
 }
 
 void loop()
@@ -853,6 +904,43 @@ void loop()
          lv_event_send(ui_EJECTButtonM, LV_EVENT_CLICKED, NULL);
         } else if(click3_short_waspressed == true){
          
+        }
+      }
+      break;
+
+      case ST_UI_PULLOUTSETTINGS:
+      {
+        if(touch_home == true){
+          touch_disabled = true;
+        }
+        
+        // Encoder 4 pullout speed
+        if(lv_slider_is_dragged(ui_pulloutspeedslider) == false){
+          if (encoder4.getCount() != pullout_enc){
+            lv_slider_set_value(ui_pulloutspeedslider, pullout_speed, LV_ANIM_OFF);
+            if(encoder4.getCount() <= 0){
+              encoder4.setCount(0);
+            } else if (encoder4.getCount() >= Encoder_MAP){
+              encoder4.setCount(Encoder_MAP);
+            } 
+            pullout_enc = encoder4.getCount();
+            pullout_speed = fscale(0, Encoder_MAP, 0, speedlimit, pullout_enc, speedscale);
+          }
+        } else if(lv_slider_get_value(ui_pulloutspeedslider) != pullout_speed){
+            pullout_enc =  fscale(0.5, speedlimit, 0, Encoder_MAP, pullout_speed, speedscale);
+            encoder4.setCount(pullout_enc);
+            pullout_speed = lv_slider_get_value(ui_pulloutspeedslider);
+        }
+        char pullout_speed_v[7];
+        dtostrf(pullout_speed, 6, 0, pullout_speed_v);
+        lv_label_set_text(ui_pulloutspeedvalue, pullout_speed_v);
+
+        if(click2_short_waspressed == true){
+         lv_event_send(ui_PulloutButtonL, LV_EVENT_CLICKED, NULL);
+        } else if(mxclick_short_waspressed == true){
+         lv_event_send(ui_PulloutButtonM, LV_EVENT_CLICKED, NULL);
+        } else if(click3_short_waspressed == true){
+         lv_event_send(ui_PulloutButtonR, LV_EVENT_CLICKED, NULL);
         }
       }
       break;

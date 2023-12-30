@@ -35,6 +35,9 @@
 #define T_DARKM             "Dark Mode"
 #define T_VIBRATE           "Vibrate"
 #define T_TOUCHSETTING      "Touch Disabled"
+#define T_PULLOUT           "Pullout"
+#define T_PULLOUT_SETTINGS  "Pullout Settings"
+#define T_PULLOUT_SPEED     "Pullout Speed"
 
 
 #define T_Patterns          "Pattern:"
