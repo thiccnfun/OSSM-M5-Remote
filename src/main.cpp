@@ -74,6 +74,10 @@ int menuestatus = CONNECT;
 #define DARKMODE 1
 #define VIBRATE 2
 #define LEFTY 6
+#define CUM_SIZE 10
+#define CUM_TIME 14
+#define CUM_ACCEL 18
+#define CUM_REVERSE 22
 
 bool eject_status = false;
 bool dark_mode = false;
@@ -96,10 +100,12 @@ bool touch_disabled = false;
 #define SETUP_D_I_F 13
 #define REBOOT 14
 
-#define CUMSPEED 20
-#define CUMTIME 21
-#define CUMSIZE   22
-#define CUMACCEL  23
+#define CUMCONN 20
+#define CUMTOGGLE 21
+#define CUMTIME 22
+#define CUMSIZE   23
+#define CUMACCEL  24
+#define CUMREVERSE 25
 
 #define CONNECT 88
 #define HEARTBEAT 99
@@ -124,15 +130,18 @@ long strokeenc = 0;
 long sensationenc = 0;
 long torqe_f_enc = 0;
 long torqe_r_enc = 0;
-long cum_t_enc = 0;
-long cum_si_enc =0;
-long cum_s_enc = 0;
-long cum_a_enc = 0;
+long cum_time_enc = 0;
+long cum_size_enc =0;
+long cum_accel_enc = 0;
 long encoder4_enc = 0;
 
 extern float maxdepthinmm = 180.0;
 extern float speedlimit = 600;
 int speedscale = 0;
+
+extern float cum_maxtime = 300;
+extern float cum_maxsize = 800;
+extern float cum_maxaccel = 500;
 
 float speed = 0.0;
 float depth = 0.0;
@@ -140,10 +149,10 @@ float stroke = 0.0;
 float sensation = 0.0;
 float torqe_f = 100.0;
 float torqe_r = -180.0;
-float cum_time = 0.0;
-float cum_speed = 0.0;
-float cum_size = 0.0;
-float cum_accel = 0.0;
+float cum_time = 1.0;
+float cum_size = 1.0;
+float cum_accel = 1.0;
+bool cum_reverse = false;
 
 ESP32Encoder encoder1;
 ESP32Encoder encoder2;
@@ -189,12 +198,16 @@ typedef struct struct_message {
 } struct_message;
 
 bool Ossm_paired = false;
+bool Eject_paired = false;
 
 struct_message outgoingcontrol;
 struct_message incomingcontrol;
 
-esp_now_peer_info_t peerInfo;
+esp_now_peer_info_t ossmPeerInfo;
+esp_now_peer_info_t ejectPeerInfo;
 uint8_t OSSM_Address[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}; // Broadcast to all ESP32s, upon connection gets updated to the actual address
+uint8_t EJECT_Address[] = {0xFE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+// uint8_t EJECT_Address[] = {0x30, 0xC6, 0xF7, 0x23, 0x9D, 0x8C};
 
 #define HEARTBEAT_INTERVAL 5000/portTICK_PERIOD_MS	// 5 seconds
 
@@ -306,75 +319,13 @@ void init_touch_driver() {
   lv_indev_t * my_indev = lv_indev_drv_register(&indev_drv);  // register
 }
 
-void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
-}
-
-void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
-  memcpy(&incomingcontrol, incomingData, sizeof(incomingcontrol));
-
-  if(incomingcontrol.esp_target == M5_ID && Ossm_paired == false){
-
-    // Remove the existing peer (0xFF:0xFF:0xFF:0xFF:0xFF:0xFF)
-    esp_err_t result = esp_now_del_peer(peerInfo.peer_addr);
-
-    if (result == ESP_OK) {
-
-      memcpy(OSSM_Address, mac, 6); //get the mac address of the sender
-      
-      // Add the new peer
-      memcpy(peerInfo.peer_addr, OSSM_Address, 6);
-      if (esp_now_add_peer(&peerInfo) == ESP_OK) {
-        LogDebugFormatted("New peer added successfully, OSSM addresss : %02X:%02X:%02X:%02X:%02X:%02X\n", OSSM_Address[0], OSSM_Address[1], OSSM_Address[2], OSSM_Address[3], OSSM_Address[4], OSSM_Address[5]);
-        Ossm_paired = true;
-      }
-      else {
-        LogDebug("Failed to add new peer");
-      }
-    }
-    else {
-      LogDebug("Failed to remove peer");
-    }
-
-    speedlimit = incomingcontrol.esp_speed;
-    maxdepthinmm = incomingcontrol.esp_depth;
-    pattern = incomingcontrol.esp_pattern;
-    outgoingcontrol.esp_target = OSSM_ID;
-    
-    result = esp_now_send(OSSM_Address, (uint8_t *) &outgoingcontrol, sizeof(outgoingcontrol));
-    LogDebug(result);
-    
-    if (result == ESP_OK) {
-      Ossm_paired = true;
-      lv_label_set_text(ui_connect, "Connected");
-      lv_scr_load_anim(ui_Home, LV_SCR_LOAD_ANIM_FADE_ON,20,0,false);
-    }
-  }
-  switch(incomingcontrol.esp_command)
-    {
-    case OFF: 
-    {
-    lv_obj_clear_state(ui_HomeButtonM, LV_STATE_CHECKED);
-    OSSM_On = false;
-    }
-    break;
-    case ON:
-    {
-    lv_obj_add_state(ui_HomeButtonM, LV_STATE_CHECKED);
-    OSSM_On = true;
-    }
-    break;
-    }
-}
-
 //Sends Commands and Value to Remote device returns ture or false if sended
-bool SendCommand(int Command, float Value, int Target){
-  
-  if(Ossm_paired == true){
-
+bool SendCommand(int Command, float Value, int Target){  
+  if(Ossm_paired && Target == OSSM_ID){
     outgoingcontrol.esp_connected = true;
     outgoingcontrol.esp_command = Command;
     outgoingcontrol.esp_value = Value;
-    outgoingcontrol.esp_target = Target;
+    outgoingcontrol.esp_target = OSSM_ID;
     esp_err_t result = esp_now_send(OSSM_Address, (uint8_t *) &outgoingcontrol, sizeof(outgoingcontrol));
   
     if (result == ESP_OK) {
@@ -386,6 +337,128 @@ bool SendCommand(int Command, float Value, int Target){
       return false;
     }
   }
+
+  if(Eject_paired && Target == EJECT_ID){
+    outgoingcontrol.esp_connected = true;
+    outgoingcontrol.esp_command = Command;
+    outgoingcontrol.esp_value = Value;
+    outgoingcontrol.esp_target = EJECT_ID;
+    esp_err_t result = esp_now_send(EJECT_Address, (uint8_t *) &outgoingcontrol, sizeof(outgoingcontrol));
+  
+    if (result == ESP_OK) {
+      return true;
+    } 
+    else {
+      delay(20);
+      esp_err_t result = esp_now_send(EJECT_Address, (uint8_t *) &outgoingcontrol, sizeof(outgoingcontrol));
+      return false;
+    }
+  }
+}
+
+void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
+  if (status != ESP_NOW_SEND_SUCCESS){
+    if (memcmp(mac_addr, EJECT_Address, sizeof(EJECT_Address)) == 0){
+      Eject_paired = false;
+      EJECT_On = false;
+    }
+  }
+}
+
+void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
+  memcpy(&incomingcontrol, incomingData, sizeof(incomingcontrol));
+
+  if(incomingcontrol.esp_target == M5_ID){
+    if (Ossm_paired == false && incomingcontrol.esp_value == 0) {
+
+      // Remove the existing peer (0xFF:0xFF:0xFF:0xFF:0xFF:0xFF)
+      esp_err_t result = esp_now_del_peer(ossmPeerInfo.peer_addr);
+
+      if (result == ESP_OK) {
+
+        memcpy(OSSM_Address, mac, 6); //get the mac address of the sender
+        
+        // Add the new peer
+        memcpy(ossmPeerInfo.peer_addr, OSSM_Address, 6);
+        if (esp_now_add_peer(&ossmPeerInfo) == ESP_OK) {
+          LogDebugFormatted("New peer added successfully, OSSM addresss : %02X:%02X:%02X:%02X:%02X:%02X\n", OSSM_Address[0], OSSM_Address[1], OSSM_Address[2], OSSM_Address[3], OSSM_Address[4], OSSM_Address[5]);
+          Ossm_paired = true;
+        }
+        else {
+          LogDebug("Failed to add new peer");
+        }
+      }
+      else {
+        LogDebug("Failed to remove peer");
+      }
+
+      speedlimit = incomingcontrol.esp_speed;
+      maxdepthinmm = incomingcontrol.esp_depth;
+      pattern = incomingcontrol.esp_pattern;
+      outgoingcontrol.esp_target = OSSM_ID;
+      
+      result = esp_now_send(OSSM_Address, (uint8_t *) &outgoingcontrol, sizeof(outgoingcontrol));      
+      if (result == ESP_OK) {
+        Ossm_paired = true;
+        lv_label_set_text(ui_connect, "Connected");
+        lv_scr_load_anim(ui_Home, LV_SCR_LOAD_ANIM_FADE_ON,20,0,false);
+      }
+    }
+
+    if (incomingcontrol.esp_value == EJECT_ID) {
+      if (Eject_paired == false) {
+        esp_err_t result = esp_now_del_peer(ejectPeerInfo.peer_addr);
+
+        if (result == ESP_OK) {
+
+          memcpy(EJECT_Address, mac, 6); //get the mac address of the sender
+          
+          // Add the new peer
+          memcpy(ejectPeerInfo.peer_addr, EJECT_Address, 6);
+          if (esp_now_add_peer(&ejectPeerInfo) == ESP_OK) {
+            LogDebugFormatted("New peer added successfully, Ejector addresss : %02X:%02X:%02X:%02X:%02X:%02X\n", EJECT_Address[0], EJECT_Address[1], EJECT_Address[2], EJECT_Address[3], EJECT_Address[4], EJECT_Address[5]);
+            Eject_paired = true;
+            SendCommand(CUMTIME, cum_time, EJECT_ID);
+            SendCommand(CUMSIZE, cum_size, EJECT_ID);
+            SendCommand(CUMACCEL, cum_accel, EJECT_ID);
+            SendCommand(CUMREVERSE, cum_reverse ? 1 : 0, EJECT_ID);
+          }
+          else {
+            LogDebug("Failed to add new ejector peer");
+          }
+        }
+        else {
+          LogDebug("Failed to remove ejector peer");
+        }
+      }
+
+      switch(incomingcontrol.esp_command)
+        {
+        case CUMTOGGLE: 
+        {
+          EJECT_On = false;
+        } 
+        break;
+      }
+    }
+  }
+
+  switch(incomingcontrol.esp_command)
+    {
+    case OFF: 
+    {
+      lv_obj_clear_state(ui_HomeButtonM, LV_STATE_CHECKED);
+      OSSM_On = false;
+    }
+    break;
+    case ON:
+    {
+      lv_obj_add_state(ui_HomeButtonM, LV_STATE_CHECKED);
+      OSSM_On = true;
+    }
+    break;
+  }
+
 }
 
 void connectbutton(lv_event_t * e)
@@ -423,6 +496,16 @@ void savesettings(lv_event_t * e)
   EEPROM.commit();
   delay(100);
   ESP.restart();
+}
+
+void saveejectsettings(lv_event_t * e)
+{
+	EEPROM.put(CUM_TIME, cum_time);
+  EEPROM.put(CUM_SIZE, cum_size);
+  EEPROM.put(CUM_ACCEL, cum_accel);
+	EEPROM.writeBool(CUM_REVERSE, lv_obj_has_state(ui_ejectreverse, LV_STATE_CHECKED));
+  EEPROM.commit();
+  delay(100);
 }
 
 void screenmachine(lv_event_t * e)
@@ -463,19 +546,36 @@ void screenmachine(lv_event_t * e)
 
   } else if (lv_scr_act() == ui_EJECTSettings){
     st_screens = ST_UI_EJECTSETTINGS;
+
+    cum_time = lv_slider_get_value(ui_ejecttimeslider);
+    cum_time_enc = fscale(1, cum_maxtime, 0, Encoder_MAP, cum_time, 0);
+    encoder1.setCount(cum_time_enc); 
+
+    cum_size = lv_slider_get_value(ui_ejectsizeslider);
+    cum_size_enc = fscale(1, cum_maxsize, 0, Encoder_MAP, cum_size, 0);
+    encoder2.setCount(cum_size_enc);
+            
+    cum_accel = lv_slider_get_value(ui_ejectaccelslider); 
+    cum_accel_enc = fscale(1, cum_maxaccel, 0, Encoder_MAP, cum_accel, 0);
+    encoder3.setCount(cum_accel_enc);
+
   } else if (lv_scr_act() == ui_Settings){
     st_screens = ST_UI_SETTINGS;
   }
 }
 
 void ejectcreampie(lv_event_t * e){
-  if(EJECT_On == true){
-    lv_obj_clear_state(ui_HomeButtonL, LV_STATE_CHECKED);
-    EJECT_On = false;
-  } else if(EJECT_On == false){
-    lv_obj_add_state(ui_HomeButtonL, LV_STATE_CHECKED);
-    EJECT_On = true;
-  } 
+  if(Eject_paired){
+    LogDebug("Ejecing");
+
+    if(EJECT_On == true){
+      EJECT_On = false;
+      SendCommand(CUMTOGGLE, 0, EJECT_ID);
+    } else if(EJECT_On == false){
+      EJECT_On = true;
+      SendCommand(CUMTOGGLE, 1, EJECT_ID);
+    } 
+  }
 }
 
 void savepattern(lv_event_t * e){
@@ -523,14 +623,23 @@ void setup(){
   // get the status of Trasnmitted packet
   esp_now_register_send_cb(OnDataSent);
 
-  // register peer
-  peerInfo.channel = 0;  
-  peerInfo.encrypt = false;
-  // register first peer  
-  memcpy(peerInfo.peer_addr, OSSM_Address, 6);
-  if (esp_now_add_peer(&peerInfo) != ESP_OK){
-    Serial.println("Failed to add peer");
+  // register ossm peer
+  ossmPeerInfo.channel = 0;  
+  ossmPeerInfo.encrypt = false;
+  memcpy(ossmPeerInfo.peer_addr, OSSM_Address, 6);
+  if (esp_now_add_peer(&ossmPeerInfo) != ESP_OK){
+    Serial.println("Failed to add OSSM peer");
+  }  
+  
+  // register eject peer
+  ejectPeerInfo.channel = 0;  
+  ejectPeerInfo.encrypt = false;
+  memcpy(ejectPeerInfo.peer_addr, EJECT_Address, 6);
+  if (esp_now_add_peer(&ejectPeerInfo) != ESP_OK){
+    Serial.println("Failed to add Ejector peer");
   }
+
+
   // Register for a callback function that will be called when data is received
   esp_now_register_recv_cb(OnDataRecv);
 
@@ -561,6 +670,10 @@ void setup(){
   dark_mode = EEPROM.readBool(DARKMODE);
   vibrate_mode = EEPROM.readBool(VIBRATE);
   touch_home = EEPROM.readBool(LEFTY);
+  cum_time = EEPROM.get(CUM_TIME, cum_time);
+  cum_size = EEPROM.get(CUM_SIZE, cum_size);
+  cum_accel = EEPROM.get(CUM_ACCEL, cum_accel);
+  cum_reverse = EEPROM.readBool(CUM_REVERSE);
 
   ui_init();
   
@@ -578,6 +691,13 @@ void setup(){
   if(touch_home == true){
   lv_obj_add_state(ui_lefty, LV_STATE_CHECKED);
   }
+  if(cum_reverse == true){
+  lv_obj_add_state(ui_ejectreverse, LV_STATE_CHECKED);
+  }
+
+  lv_slider_set_value(ui_ejecttimeslider, cum_time, LV_ANIM_OFF);
+  lv_slider_set_value(ui_ejectsizeslider, cum_size, LV_ANIM_OFF);
+  lv_slider_set_value(ui_ejectaccelslider, cum_accel, LV_ANIM_OFF);
   lv_roller_set_selected(ui_PatternS,2,LV_ANIM_OFF);
   lv_roller_get_selected_str(ui_PatternS,patternstr,0);
   lv_label_set_text(ui_HomePatternLabel,patternstr);
@@ -600,6 +720,8 @@ void loop()
      lv_label_set_text(ui_BattValue4, battVal);
      lv_bar_set_value(ui_Battery5, BatteryLevel, LV_ANIM_OFF);
      lv_label_set_text(ui_BattValue5, battVal);
+     lv_bar_set_value(ui_Battery6, BatteryLevel, LV_ANIM_OFF);
+     lv_label_set_text(ui_BattValue6, battVal);
 
      M5.update();
      lv_task_handler();
@@ -715,6 +837,22 @@ void loop()
             encoder4.setCount(sensationenc);
             sensation = lv_slider_get_value(ui_homesensationslider);
             SendCommand(SENSATION, sensation, OSSM_ID);
+        }
+
+        // Eject button
+
+        if (Eject_paired) {
+          lv_label_set_text(ui_HomeButtonLText, "Creampie");
+          lv_obj_clear_state(ui_HomeButtonL, LV_STATE_DISABLED);
+
+          if(EJECT_On == true){
+            lv_obj_add_state(ui_HomeButtonL, LV_STATE_CHECKED);
+          } else {
+            lv_obj_clear_state(ui_HomeButtonL, LV_STATE_CHECKED);
+          }
+        } else {
+          lv_label_set_text(ui_HomeButtonLText, "-");
+          lv_obj_add_state(ui_HomeButtonL, LV_STATE_DISABLED);
         }
 
         if(click2_short_waspressed == true){
@@ -846,8 +984,102 @@ void loop()
         if(touch_home == true){
           touch_disabled = true;
         }
-        
-         if(click2_short_waspressed == true){
+
+        if (Eject_paired) {
+          lv_obj_clear_state(ui_EJECTButtonL, LV_STATE_DISABLED);
+          lv_label_set_text(ui_EJECTButtonLText, "Test");
+
+          if(EJECT_On == true){
+            lv_obj_add_state(ui_EJECTButtonL, LV_STATE_CHECKED);
+          } else {
+            lv_obj_clear_state(ui_EJECTButtonL, LV_STATE_CHECKED);
+          }
+
+          bool reverse = lv_obj_has_state(ui_ejectreverse, LV_STATE_CHECKED);
+          if (cum_reverse != reverse){
+            cum_reverse = reverse;
+            SendCommand(CUMREVERSE, cum_reverse ? 1 : 0, EJECT_ID);
+          }
+        } else {
+          lv_label_set_text(ui_EJECTButtonLText, "-");
+          lv_obj_add_state(ui_EJECTButtonL, LV_STATE_DISABLED);
+        }
+
+        // Encoder1 Cum Time
+        if(lv_slider_is_dragged(ui_ejecttimeslider) == false){
+          if (encoder1.getCount() != cum_time_enc){
+            lv_slider_set_value(ui_ejecttimeslider, cum_time, LV_ANIM_OFF);
+            if(encoder1.getCount() <= 0){
+              encoder1.setCount(0);
+            } else if (encoder1.getCount() >= Encoder_MAP){
+              encoder1.setCount(Encoder_MAP);
+            } 
+            if (cum_time_enc > encoder1.getCount()) {
+              cum_time = max(cum_time-1, (float) 1);
+            } else if (cum_time_enc < encoder1.getCount()) {
+              cum_time = min(cum_time+1, cum_maxtime);
+            }
+            cum_time_enc = encoder1.getCount();
+            SendCommand(CUMTIME, cum_time, EJECT_ID);
+          }
+        } else if(lv_slider_get_value(ui_ejecttimeslider) != cum_time){
+          cum_time_enc = fscale(1, cum_maxtime, 0, Encoder_MAP, cum_time, 0);
+          encoder1.setCount(cum_time_enc);
+          cum_time = lv_slider_get_value(ui_ejecttimeslider);
+          SendCommand(CUMTIME, cum_time, EJECT_ID);
+        }
+        char cum_time_v[7];
+        dtostrf(cum_time, 6, 0, cum_time_v);
+        lv_label_set_text(ui_ejecttimevalue, cum_time_v);
+
+        // Encoder2 Cum Size
+        if(lv_slider_is_dragged(ui_ejectsizeslider) == false){
+          if (encoder2.getCount() != cum_size_enc){
+            lv_slider_set_value(ui_ejectsizeslider, cum_size, LV_ANIM_OFF);
+            if(encoder2.getCount() <= 0){
+              encoder2.setCount(0);
+            } else if (encoder2.getCount() >= Encoder_MAP){
+              encoder2.setCount(Encoder_MAP);
+            } 
+            cum_size_enc = encoder2.getCount();
+            cum_size = fscale(0, Encoder_MAP, 1, cum_maxsize, cum_size_enc, 0);
+            SendCommand(CUMSIZE, cum_size, EJECT_ID);
+          }
+        } else if(lv_slider_get_value(ui_ejectsizeslider) != cum_size){
+          cum_size_enc = fscale(1, cum_maxsize, 0, Encoder_MAP, cum_size, 0);
+          encoder2.setCount(cum_size_enc);
+          cum_size = lv_slider_get_value(ui_ejectsizeslider);
+          SendCommand(CUMSIZE, cum_size, EJECT_ID);
+        }
+        char cum_size_v[7];
+        dtostrf(cum_size, 6, 0, cum_size_v);
+        lv_label_set_text(ui_ejectsizevalue, cum_size_v);
+
+        // Encoder3 Cum Force
+        if(lv_slider_is_dragged(ui_ejectaccelslider) == false){
+          if (encoder3.getCount() != cum_accel_enc){
+            lv_slider_set_value(ui_ejectaccelslider, cum_accel, LV_ANIM_OFF);
+            if(encoder3.getCount() <= (Encoder_MAP/2*-1)){
+              encoder3.setCount((Encoder_MAP/2*-1));
+            } else if (encoder3.getCount() >= (Encoder_MAP/2)){
+              encoder3.setCount((Encoder_MAP/2));
+            } 
+            cum_accel_enc = encoder3.getCount();
+            cum_accel = fscale(0, Encoder_MAP, 1, cum_maxaccel, cum_accel_enc, 0);
+            SendCommand(CUMACCEL, cum_accel, EJECT_ID);
+          }
+        } else if(lv_slider_get_value(ui_ejectaccelslider) != cum_accel){
+            cum_accel_enc = fscale(1, cum_maxaccel, 0, Encoder_MAP, cum_accel, 0);
+            encoder3.setCount(cum_accel_enc);
+            cum_accel = lv_slider_get_value(ui_ejectaccelslider);
+            SendCommand(CUMACCEL, cum_accel, EJECT_ID);
+        }
+        char cum_accel_v[7];
+        dtostrf(cum_accel, 6, 0, cum_accel_v);
+        lv_label_set_text(ui_ejectaccelvalue, cum_accel_v);
+
+
+        if(click2_short_waspressed == true){
          lv_event_send(ui_EJECTButtonL, LV_EVENT_CLICKED, NULL);
         } else if(mxclick_short_waspressed == true){
          lv_event_send(ui_EJECTButtonM, LV_EVENT_CLICKED, NULL);
@@ -898,59 +1130,15 @@ void espNowRemoteTask(void *pvParameters)
       outgoingcontrol.esp_target = OSSM_ID;
       esp_err_t result = esp_now_send(OSSM_Address, (uint8_t *) &outgoingcontrol, sizeof(outgoingcontrol));
     }
+    if(Eject_paired){
+      outgoingcontrol.esp_command = HEARTBEAT;
+      outgoingcontrol.esp_heartbeat = true;
+      outgoingcontrol.esp_target = EJECT_ID;
+      esp_err_t result = esp_now_send(EJECT_Address, (uint8_t *) &outgoingcontrol, sizeof(outgoingcontrol));
+    }
     vTaskDelay(HEARTBEAT_INTERVAL);
   }
 }
-
-/*
-void cumscreentask(void *pvParameters)
-{
-  for(;;)
-  {
-    M5.Lcd.setTextColor(FrontColor);
-    if(encoder1.getCount() != cum_s_enc)
-    {
-    cum_s_enc = encoder1.getCount();
-    cum_speed = map(constrain(cum_s_enc,0,Encoder_MAP),0,Encoder_MAP,1000,30000);
-    M5.Lcd.fillRect(199,S1Pos,85,30,BgColor);
-    M5.Lcd.setCursor(200,S1Pos+progheight-5);
-    M5.Lcd.print(cum_speed);
-    SendCommand(CUMSPEED, cum_speed, CUM);
-    }
-
-  if(encoder2.getCount() != cum_t_enc)
-    {
-    cum_t_enc = encoder2.getCount();
-    cum_time = map(constrain(cum_t_enc,0,Encoder_MAP),0,Encoder_MAP,0,60);
-    M5.Lcd.fillRect(199,S2Pos,85,30,BgColor);
-    M5.Lcd.setCursor(200,S2Pos+progheight-5);
-    M5.Lcd.print(cum_time);
-    SendCommand(CUMTIME, cum_time, CUM);
-    }
-
-   if(encoder3.getCount() != cum_si_enc)
-    {
-    cum_si_enc = encoder3.getCount();
-    cum_size = map(constrain(cum_si_enc,0,Encoder_MAP),0,Encoder_MAP,0,40);
-    M5.Lcd.fillRect(199,S3Pos,85,30,BgColor);
-    M5.Lcd.setCursor(200,S3Pos+progheight-5);
-    M5.Lcd.print(cum_size);
-    SendCommand(CUMSIZE, cum_size, CUM);
-    }
-
-   if(encoder4.getCount() != cum_a_enc)
-    {
-    cum_a_enc = encoder4.getCount();
-    cum_accel = map(constrain(cum_a_enc,0,Encoder_MAP),0,Encoder_MAP,0,20);
-    M5.Lcd.fillRect(199,S4Pos,85,30,BgColor);
-    M5.Lcd.setCursor(200,S4Pos+progheight-5);
-    M5.Lcd.print(cum_accel);
-    SendCommand(CUMACCEL, cum_accel, CUM);
-    }
-  vTaskDelay(100);
-  }
-}
-*/
 
 void vibrate(){
     if(vibrate_mode == true){

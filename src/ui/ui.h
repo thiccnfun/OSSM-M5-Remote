@@ -121,6 +121,18 @@ extern lv_obj_t * ui_EJECTButtonRText;
 extern lv_obj_t * ui_Batt6;
 extern lv_obj_t * ui_BattValue6;
 extern lv_obj_t * ui_Battery6;
+extern lv_obj_t * ui_EjectSpeedL;
+extern lv_obj_t * ui_ejectspeedvalue;
+extern lv_obj_t * ui_EjectTimeL;
+extern lv_obj_t * ui_ejecttimeslider;
+extern lv_obj_t * ui_ejecttimevalue;
+extern lv_obj_t * ui_EjectSizeL;
+extern lv_obj_t * ui_ejectsizeslider;
+extern lv_obj_t * ui_ejectsizevalue;
+extern lv_obj_t * ui_EjectAccelL;
+extern lv_obj_t * ui_ejectaccelslider;
+extern lv_obj_t * ui_ejectaccelvalue;
+extern lv_obj_t * ui_ejectreverse;
 extern lv_obj_t * ui_Settings;
 extern lv_obj_t * ui_Logo1;
 extern lv_obj_t * ui_SettingsButtonL;
@@ -154,6 +166,7 @@ void screenmachine(lv_event_t * e);
 void screenmachine(lv_event_t * e);
 void screenmachine(lv_event_t * e);
 void savesettings(lv_event_t * e);
+void saveejectsettings(lv_event_t * e);
 
 LV_IMG_DECLARE(ui_img_km__png);    // assets\km..png
 LV_IMG_DECLARE(ui_img_ortlodof_png);    // assets\ortlodof.png
